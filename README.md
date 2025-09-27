@@ -20,12 +20,6 @@ SUCCESS: Replaced method in target/smali/com/example/PackageVerification.smali
 
 There is a example .smalipatch file for you !!
 _________________________________________________________
-FILE smali_classes4/android/util/apk/ApkSignatureVerifier.smali
-REPLACE .method public static blacklist getMinimumSignatureSchemeVersionForTargetSdk(I)I
-    .locals 1
-    .param p0, "targetSdk"    # I
-
-    const/4 v0, 0x1     
-    return v0          
+Check the apk_signature_disable.smalipatch as example  
 __________________________________________________________
 Happy Modding ;D
