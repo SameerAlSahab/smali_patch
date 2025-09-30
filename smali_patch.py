@@ -3,39 +3,48 @@ import os
 import sys
 import re
 import logging
-import argparse
 
-def setup_logging(verbose=False):
+def setup_logging():
     """Setup logging configuration"""
-    level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
-        format='%(levelname)s: %(message)s',
-        level=level
+        format='%(message)s',
+        level=logging.INFO
     )
 
-def apply_smalipatch(work_dir, patch_file, dry_run=False):
+def apply_smalipatch(work_dir, patch_file):
     """Apply .smalipatch files to smali files"""
     
     with open(patch_file, 'r', encoding='utf-8') as f:
         lines = [line.rstrip('\r\n') for line in f.readlines()]
     
     if not lines:
-        logging.error(f"Empty patch file {patch_file}")
+        logging.error(f"ERROR: Empty patch file {patch_file}")
         return False
     
     patches = parse_patches(lines)
     if not patches:
-        logging.error(f"No valid patches found in {patch_file}")
+        logging.error(f"ERROR: No valid patches found in {patch_file}")
         return False
     
     success_count = 0
-    for i, patch in enumerate(patches):
-        logging.info(f"Applying patch {i+1}/{len(patches)}...")
-        if apply_single_patch(work_dir, patch, dry_run):
-            success_count += 1
+    total_patches = len(patches)
     
-    logging.info(f"Applied {success_count}/{len(patches)} patches successfully")
-    return success_count > 0
+    for i, patch in enumerate(patches):
+        logging.info(f"Applying patch {i+1}/{total_patches}...")
+        result = apply_single_patch(work_dir, patch)
+        if result == "applied":
+            success_count += 1
+            logging.info("✓ Patch applied successfully")
+        elif result == "skipped":
+            logging.info("✓ Patch already applied, skipping")
+            success_count += 1
+        elif result == "failed":
+            logging.error("✗ Patch failed to apply")
+        elif result == "hunk_failed":
+            logging.error("✗ Hunk doesn't match, skipping patch")
+    
+    logging.info(f"Final result: {success_count}/{total_patches} patches applied successfully")
+    return success_count == total_patches
 
 def parse_patches(lines):
     """Parse multiple patches from a single file"""
@@ -75,21 +84,16 @@ def parse_patches(lines):
                 })
                 
             elif line.startswith('PATCH '):
-                # Check if method signature is provided
                 patch_header = line[6:].strip()
                 method_sig = None
                 if patch_header and not patch_header.startswith(('+', '-')):
-                    # Method signature provided, extract it
                     method_sig = patch_header
                     i += 1
                 else:
-                    # No method signature, use context-based search
                     i += 1
                 
-                # Parse patch content with simple +/- logic
                 patch_operations = []
                 
-                # Read patch content until END or next FILE
                 while i < len(lines) and not lines[i].strip() in ['END', 'FILE ']:
                     patch_line = lines[i]
                     if patch_line.startswith('+ '):
@@ -97,7 +101,6 @@ def parse_patches(lines):
                     elif patch_line.startswith('- '):
                         patch_operations.append(('-', patch_line[2:]))
                     else:
-                        # Regular line (context)
                         patch_operations.append((' ', patch_line))
                     i += 1
                 
@@ -111,66 +114,79 @@ def parse_patches(lines):
         else:
             i += 1
     
-    # Add the last patch if exists
     if current_patch:
         patches.append(current_patch)
     
     return patches
 
-def apply_single_patch(work_dir, patch, dry_run=False):
-    """Apply a single patch to a file"""
+def apply_single_patch(work_dir, patch):
+    """Apply a single patch to a file - always dry run first"""
     file_path = patch['file_path']
     full_path = os.path.join(work_dir, file_path)
     
     if not os.path.exists(full_path):
-        logging.error(f"Target file not found: {full_path}")
-        return False
+        logging.error(f"ERROR: Target file not found: {full_path}")
+        return "failed"
     
-    # Read the target smali file
     with open(full_path, 'r', encoding='utf-8') as f:
-        smali_lines = [line.rstrip('\r\n') for line in f.readlines()]
+        original_lines = [line.rstrip('\r\n') for line in f.readlines()]
     
-    original_lines = smali_lines.copy()
-    new_lines = smali_lines.copy()
-    modified = False
+    current_lines = original_lines.copy()
+    patch_applied = False
+    any_hunk_failed = False
     
     for action in patch['actions']:
         if action['type'] == 'REPLACE':
-            result = apply_replace_action(new_lines, action, dry_run)
-            if result:
-                new_lines = result
-                modified = True
-            else:
-                return False
+            result = apply_replace_action(current_lines, action, dry_run=True)
+            if result and result != current_lines:
+                current_lines = result
+                patch_applied = True
+            elif not result:
+                any_hunk_failed = True
                 
         elif action['type'] == 'PATCH':
-            result = apply_patch_action(new_lines, action, dry_run)
-            if result:
-                new_lines = result
-                modified = True
+            result = apply_patch_action(current_lines, action, dry_run=True)
+            if result and result != current_lines:
+                current_lines = result
+                patch_applied = True
+            elif result == current_lines:
+                # Patch would make no changes (already applied)
+                pass
             else:
-                return False
+                any_hunk_failed = True
     
-    if modified and not dry_run:
-        # Write the modified content back
-        with open(full_path, 'w', encoding='utf-8', newline='\n') as f:
-            for line in new_lines:
-                f.write(line + '\n')
-        logging.info(f"SUCCESS: Applied patch to {file_path}")
-        return True
-    elif dry_run and modified:
-        logging.info(f"DRY-RUN: Would apply patch to {file_path}")
-        show_diff(original_lines, new_lines)
-        return True
+    if any_hunk_failed:
+        return "hunk_failed"
     
-    return False
+    if not patch_applied:
+        return "skipped"
+    
+    # Show what would be changed
+    show_diff(original_lines, current_lines)
+    
+    # Actually apply the patch
+    final_lines = original_lines.copy()
+    for action in patch['actions']:
+        if action['type'] == 'REPLACE':
+            result = apply_replace_action(final_lines, action, dry_run=False)
+            if result:
+                final_lines = result
+        elif action['type'] == 'PATCH':
+            result = apply_patch_action(final_lines, action, dry_run=False)
+            if result:
+                final_lines = result
+    
+    with open(full_path, 'w', encoding='utf-8', newline='\n') as f:
+        for line in final_lines:
+            f.write(line + '\n')
+    
+    return "applied"
 
-def apply_replace_action(smali_lines, action, dry_run=False):
+def apply_replace_action(smali_lines, action, dry_run=True):
     """Apply REPLACE action - replace entire method using regex matching"""
     method_sig = action['method_sig']
     patch_content = action['content']
     
-    # Convert simple method signature to regex pattern
     pattern = method_sig_to_regex(method_sig)
     
     new_lines = []
@@ -181,21 +197,16 @@ def apply_replace_action(smali_lines, action, dry_run=False):
         line = smali_lines[i]
         
         if not replaced and re.match(pattern, line):
-            # Found the method signature using regex
-            logging.debug(f"Found method with regex: {pattern}")
             new_lines.append(line)
             i += 1
             replaced = True
             
-            # Skip all lines until .end method
             while i < len(smali_lines) and not smali_lines[i].startswith('.end method'):
                 i += 1
             
-            # Add the patch content
             for patch_line in patch_content:
                 new_lines.append(patch_line)
             
-            # Add the .end method
             if i < len(smali_lines):
                 new_lines.append(smali_lines[i])
                 i += 1
@@ -204,138 +215,145 @@ def apply_replace_action(smali_lines, action, dry_run=False):
             i += 1
     
     if not replaced:
-        logging.error(f"Method not found with pattern: {pattern}")
+        logging.error(f"ERROR: Method not found: {method_sig}")
         return None
         
     return new_lines
 
-def apply_patch_action(smali_lines, action, dry_run=False):
+def apply_patch_action(smali_lines, action, dry_run=True):
     """Apply PATCH action with simple +/- logic"""
     operations = action['operations']
     method_sig = action['method_sig']
     
     if not operations:
-        logging.error("PATCH action requires operations")
+        logging.error("ERROR: PATCH action requires operations")
         return None
     
-    # Extract context lines (regular lines without +/-)
+    # Filter out .line directives for context matching
+    def filter_line_directives(lines):
+        return [line for line in lines if not line.strip().startswith('.line ')]
+    
+    # Get context lines (regular lines without +/-)
     context_lines = [line for op, line in operations if op == ' ']
+    context_lines_clean = filter_line_directives(context_lines)
     
-    if not context_lines:
-        logging.error("PATCH action requires context lines (lines without +/-)")
+    if not context_lines_clean:
+        logging.error("ERROR: PATCH action requires context lines")
         return None
     
-    # If method signature is provided, search within that method
+    # If method signature provided, search within that method
     search_range = None
     if method_sig:
         pattern = method_sig_to_regex(method_sig)
         method_start, method_end = find_method_range(smali_lines, pattern)
         if method_start == -1:
-            logging.error(f"Method not found with pattern: {pattern}")
+            logging.error(f"ERROR: Method not found: {method_sig}")
             return None
         search_range = (method_start, method_end)
-        logging.debug(f"Searching within method: {method_sig} (lines {method_start}-{method_end})")
     
-    # Find the context in the smali code
-    context_index = find_context(smali_lines, context_lines, search_range)
-    if context_index == -1:
-        logging.error("Context not found in target file")
-        logging.error("Context looked for:")
-        for ctx in context_lines:
-            logging.error(f"  {ctx}")
+    # Create clean version of smali lines for context matching
+    smali_clean = filter_line_directives(smali_lines)
+    clean_to_original = [i for i, line in enumerate(smali_lines) if not line.strip().startswith('.line ')]
+    
+    # Find context in clean lines
+    context_index_clean = find_context(smali_clean, context_lines_clean)
+    if context_index_clean == -1:
+        logging.error("ERROR: Context not found in target file")
         return None
     
-    logging.debug(f"Found context at line {context_index}")
+    # Map back to original line numbers
+    context_index = clean_to_original[context_index_clean]
+    
+    # Find the exact position considering .line directives
+    exact_position = find_exact_position(smali_lines, context_index, context_lines)
+    if exact_position == -1:
+        logging.error("ERROR: Cannot find exact position for patch")
+        return None
     
     if dry_run:
-        logging.info(f"DRY-RUN: Would apply patch at line {context_index}")
-        return smali_lines
+        # For dry run, just return modified lines to check if changes would be made
+        test_lines = smali_lines.copy()
+        result = apply_modifications(test_lines, exact_position, operations)
+        return result
     
+    # Apply modifications for real
+    return apply_modifications(smali_lines, exact_position, operations)
+
+def apply_modifications(smali_lines, context_index, operations):
+    """Apply the actual modifications to the smali lines"""
     new_lines = smali_lines.copy()
+    offset = 0
     
-    # Find where the modifications should happen relative to context
-    context_end = context_index + len(context_lines)
-    
-    # Group operations by their position relative to context
-    modifications_before = []
-    modifications_after = []
+    # Group operations by type and position
+    removes = []
+    adds = []
     
     current_pos = 0
     for op_type, content in operations:
         if op_type == ' ':
-            # Context line - move position forward
             current_pos += 1
         elif op_type == '-':
-            # Remove line - should match current position
-            modifications_after.append(('-', content, current_pos))
+            removes.append((current_pos, content))
         elif op_type == '+':
-            # Add line - can be at current position
-            modifications_after.append(('+', content, current_pos))
+            adds.append((current_pos, content))
     
-    # Apply modifications (removals first, then additions)
-    offset = 0
-    
-    # First, handle removals
-    for op_type, content, pos in modifications_after:
-        if op_type == '-':
-            target_index = context_index + pos + offset
-            if target_index < len(new_lines) and content in new_lines[target_index]:
-                del new_lines[target_index]
+    # Apply removals first (from bottom to top)
+    for pos, content in reversed(removes):
+        target_index = context_index + pos + offset
+        found = False
+        # Search around the expected position
+        for i in range(max(0, target_index-2), min(len(new_lines), target_index+3)):
+            if i < len(new_lines) and content in new_lines[i]:
+                del new_lines[i]
                 offset -= 1
-                logging.debug(f"Removed: {content}")
-            else:
-                logging.warning(f"Line to remove not found at position: {content}")
+                found = True
+                break
+        if not found:
+            logging.warning(f"WARNING: Line to remove not found: {content}")
     
-    # Then, handle additions
-    for op_type, content, pos in modifications_after:
-        if op_type == '+':
-            target_index = context_index + pos + offset
-            new_lines.insert(target_index, content)
-            offset += 1
-            logging.debug(f"Added: {content}")
+    # Apply additions
+    for pos, content in adds:
+        target_index = context_index + pos + offset
+        new_lines.insert(target_index, content)
+        offset += 1
     
     return new_lines
 
+def find_exact_position(smali_lines, context_index, context_lines):
+    """Find the exact position considering all context lines including .line"""
+    for i in range(max(0, context_index-5), min(len(smali_lines), context_index+10)):
+        match = True
+        for j, context_line in enumerate(context_lines):
+            check_idx = i + j
+            if check_idx >= len(smali_lines) or context_line not in smali_lines[check_idx]:
+                match = False
+                break
+        if match:
+            return i
+    return -1
+
 def method_sig_to_regex(method_sig):
-    """Convert method signature to regex pattern for better matching"""
-    # Escape special regex characters but preserve wildcards if needed
+    """Convert method signature to regex pattern"""
     escaped = re.escape(method_sig)
-    
-    # Allow flexible matching for common variations
-    # Convert escaped spaces to allow any whitespace
     escaped = escaped.replace(r'\ ', r'\s+')
-    
-    # Allow any number of parameters (.*) but be careful with regex
-    if r'\.\.\.' in escaped:
-        escaped = escaped.replace(r'\.\.\.', r'\.\.\.')
-    
-    # Make sure we match the whole line (or at least start with the pattern)
     if not escaped.startswith('^'):
         escaped = '^\\s*' + escaped
-    
     return escaped
 
 def find_method_range(smali_lines, method_pattern):
     """Find the start and end line numbers of a method"""
-    start_line = -1
-    end_line = -1
-    
     for i, line in enumerate(smali_lines):
-        if start_line == -1 and re.match(method_pattern, line):
-            start_line = i
-            # Now find the corresponding .end method
+        if re.match(method_pattern, line):
             for j in range(i, len(smali_lines)):
                 if smali_lines[j].startswith('.end method'):
-                    end_line = j
-                    return start_line, end_line
+                    return i, j
             break
-    
     return -1, -1
 
 def find_context(smali_lines, context_lines, search_range=None):
     """Find the starting index of context lines in smali code"""
     if not context_lines:
-        return 0 if search_range else -1
+        return -1
     
     start_idx = search_range[0] if search_range else 0
     end_idx = search_range[1] if search_range else len(smali_lines) - len(context_lines) + 1
@@ -354,39 +372,39 @@ def find_context(smali_lines, context_lines, search_range=None):
 
 def show_diff(original, modified):
     """Show diff between original and modified content"""
-    logging.info("Changes that would be applied:")
-    for i, (orig, mod) in enumerate(zip(original, modified)):
-        if orig != mod:
-            logging.info(f"Line {i+1}:")
-            if i < len(original) and i < len(modified):
-                if orig != modified[i]:
-                    logging.info(f"  - {orig}")
-                    logging.info(f"  + {modified[i]}")
-            elif i >= len(original):
-                logging.info(f"  + {modified[i]}")
-            elif i >= len(modified):
-                logging.info(f"  - {orig}")
+    logging.info("Changes to be applied:")
+    for i in range(max(len(original), len(modified))):
+        if i < len(original) and i < len(modified):
+            if original[i] != modified[i]:
+                logging.info(f"@@ Line {i+1} @@")
+                logging.info(f"- {original[i]}")
+                logging.info(f"+ {modified[i]}")
+        elif i < len(original):
+            logging.info(f"@@ Line {i+1} @@")
+            logging.info(f"- {original[i]}")
+        elif i < len(modified):
+            logging.info(f"@@ Line {i+1} @@")
+            logging.info(f"+ {modified[i]}")
 
 def main():
-    parser = argparse.ArgumentParser(description='Apply smali patches')
-    parser.add_argument('work_dir', help='Working directory containing smali files')
-    parser.add_argument('patch_file', help='Patch file to apply')
-    parser.add_argument('--dry-run', action='store_true', help='Show what would be patched without applying')
-    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose output')
-    
-    args = parser.parse_args()
-    
-    setup_logging(args.verbose)
-    
-    if not os.path.exists(args.work_dir):
-        logging.error(f"Work directory does not exist: {args.work_dir}")
+    if len(sys.argv) != 3:
+        print("Usage: smalipatch.py <work_dir> <patch_file>")
         sys.exit(1)
     
-    if not os.path.exists(args.patch_file):
-        logging.error(f"Patch file does not exist: {args.patch_file}")
+    work_dir = sys.argv[1]
+    patch_file = sys.argv[2]
+    
+    setup_logging()
+    
+    if not os.path.exists(work_dir):
+        logging.error(f"ERROR: Work directory does not exist: {work_dir}")
         sys.exit(1)
     
-    success = apply_smalipatch(args.work_dir, args.patch_file, args.dry_run)
+    if not os.path.exists(patch_file):
+        logging.error(f"ERROR: Patch file does not exist: {patch_file}")
+        sys.exit(1)
+    
+    success = apply_smalipatch(work_dir, patch_file)
     sys.exit(0 if success else 1)
 
 if __name__ == "__main__":
