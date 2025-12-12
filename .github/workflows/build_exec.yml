@@ -31,11 +31,12 @@ jobs:
         run: |
           python -m nuitka \
             --onefile \
-            --standalone \
             --output-filename=smalipatcher \
             --remove-output \
             --assume-yes-for-downloads \
             --enable-plugin=anti-bloat \
+            --enable-plugin=upx \ 
+            --upx-level=9 \ 
             --show-progress \
             --show-memory \
             smali_patch.py
@@ -46,10 +47,6 @@ jobs:
           ./smalipatcher.bin --version || echo "Version check failed but binary exists"
           ls -lh smalipatcher
       
-      - name: Compress with UPX (optional)
-        run: |
-          sudo apt-get install -y upx-ucl
-          upx --best --lzma smalipatcher || echo "UPX compression failed, using uncompressed"
       
       
       - name: Upload binary artifact
