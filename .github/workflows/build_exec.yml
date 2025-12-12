@@ -42,14 +42,13 @@ jobs:
       
       - name: Verify build
         run: |
-          chmod +x smalipatcher.bin
+          chmod +x smalipatcher
           ./smalipatcher.bin --version || echo "Version check failed but binary exists"
-          ls -lh smalipatcher.bin
+          ls -lh smalipatcher
       
       - name: Compress with UPX (optional)
         run: |
           sudo apt-get install -y upx-ucl
-          cp smalipatcher.bin smalipatcher
           upx --best --lzma smalipatcher || echo "UPX compression failed, using uncompressed"
       
       
