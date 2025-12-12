@@ -37,7 +37,6 @@ jobs:
             --assume-yes-for-downloads \
             --enable-plugin=anti-bloat \
             --enable-plugin=upx \
-            --upx-level=9 \
             --show-progress \
             --show-memory \
             smali_patch.py
