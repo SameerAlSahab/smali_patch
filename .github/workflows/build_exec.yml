@@ -18,16 +18,17 @@ jobs:
           python-version: '3.11'
       
       - name: Install system dependencies
+        # 'patchelf' removed as it's not needed when using Nuitka's built-in UPX plugin
         run: |
           sudo apt-get update
-          sudo apt-get install -y ccache patchelf
+          sudo apt-get install -y ccache
       
       - name: Install Nuitka
         run: |
           python -m pip install --upgrade pip
           pip install nuitka ordered-set zstandard
       
-      - name: Build with Nuitka
+      - name: Build with Nuitka and UPX
         run: |
           python -m nuitka \
             --onefile \
@@ -41,13 +42,11 @@ jobs:
             --show-memory \
             smali_patch.py
       
-      - name: Verify build
+      - name: Verify build and show size
         run: |
           chmod +x smalipatcher
-          ./smalipatcher.bin --version || echo "Version check failed but binary exists"
-          ls -lh smalipatcher
-      
-      
+          ./smalipatcher --version || echo "Version check failed but binary exists"
+
       
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
