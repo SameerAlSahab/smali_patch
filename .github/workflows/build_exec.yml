@@ -36,13 +36,14 @@ jobs:
             --remove-output \
             --assume-yes-for-downloads \
             --enable-plugin=anti-bloat \
-            --enable-plugin=upx \ 
-            --upx-level=9 \ 
+            --enable-plugin=upx \
+            --upx-level=9 \
             --show-progress \
             --show-memory \
             smali_patch.py
+
       
-      - name: Verify build and show size
+      - name: Verify build 
         run: |
           chmod +x smalipatcher
           ./smalipatcher --version || echo "Version check failed but binary exists"
