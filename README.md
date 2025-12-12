@@ -236,7 +236,7 @@ REMOVE com/example/OldClass.smali
 
 #### 9. FIND_REPLACE
 
-Replaces all matching and unique titles and strings that exist in apk/jar.
+Replaces all matching values or lines in a .smali file
 
 ```
 FIND_REPLACE "Hello World" "Bye World"
@@ -388,12 +388,7 @@ PATCH .method public myMethod()V
   return-void
 ```
 
-**Bad (too little context):**
-```
-PATCH .method public myMethod()V
-- const-string v1, "old"
-+ const-string v1, "new"
-```
+
 
 ### 2. Use Appropriate Action Types
 
@@ -503,11 +498,8 @@ python3 smalipatch-generator.py --dir ./smali ./smali-modified output.smalipatch
 
 3. **Test incrementally**: Apply patches one at a time during development
 
-4. **Keep backups**: Generator creates backups automatically, but keep your own too
+4. **Use comments**: Add `#` or `//` comments in patch files for clarity
 
-5. **Use comments**: Add `#` or `//` comments in patch files for clarity
-
-6. **Version your patches**: Include version in filename: `feature-v1.0.smalipatch`
 
 ---
 
@@ -557,5 +549,5 @@ smalipatch-generator.py --dir <o> <m> <out>  # Directories
 | `REMOVE_FIELD` | Delete field | Remove old variable |
 | `CREATE` | New file | Create class |
 | `REMOVE` | Delete file | Remove class |
-| `FIND_REPLACE` | Replaces string | Unique classes |
+| `FIND_REPLACE` | Replaces string | replace value or selected lines |
 | `CREDIT` | Attribution | Author credits |
